@@ -1,0 +1,177 @@
+---
+title: "Capstone Project"
+author: "rgeos"
+date: "July 21, 2015"
+output: html_document
+---
+
+```{r setoptions, echo = FALSE, warning=FALSE, message=FALSE}
+library(knitr)
+library(tm)
+library(qdap)
+library(RWeka)
+library(openNLP)
+library(ggplot2)
+library(wordcloud)
+library(doMC)
+registerDoMC(cores = 1)
+```
+
+# 1. Introduction
+The first step in building a predictive model for text is understanding the distribution and relationship between the words, tokens, and phrases in the text. The goal of this task is to perform some level of exploratory analysis and to understand the basic relationships observed in the data.
+Some of the necessary libraries are already loaded in the background (e.g `knitr, tm, RWeka, openNLP` etc...)
+
+# 2. Tasks to accomplish
+
+## 2.1. Exploratory analysis
+
+I will comment out the following command since this may not work for you as it does for me. Please change the directory name to fit your needs and comment out the line. As a prerequisite, you should already have the 3 data files (English version) in your working directory. This will show the 3 files with data in English that we will be working with.
+
+```{r}
+# setwd("capstone_data/")
+list_files = dir(pattern = "en_US*")
+list_files
+```
+
+We will determine the size of the files using a Linux system call of the command `du` or "disk usage". The following function will show the size in Megabytes for all files in `list_files`. As an alternative, you could use R to show the size in Megabytes like: `file.info("path/to/the/file")$size / 1024^2`. The result will be the same.
+
+```{r}
+cat(
+  sapply(
+    list_files,
+    function(x)
+      {
+        system(paste("du -kh",x), intern = TRUE)
+      }
+    )
+  ) # size of each file
+```
+
+Another system call to identify the number of lines (`-l`), how many words (`-w`) and how many characters (`-c`) does each file in the `list_files` have. Please note that the options for the system call command may be different based on the flavor of the `*nix`. 
+
+```{r}
+cat(
+  sapply(
+    list_files,
+    function(x)
+      {
+        system(paste("wc -lwc",x), intern = TRUE)
+      }
+    )
+  ) # number of lines, words, characters in this order for each file
+```
+
+## 2.2. Word frequencies
+
+Perform some analysis on the first 5000 lines from each file. First load the lines and combine them in one sample text variable.
+
+```{r}
+blogs   = readLines(list_files[1], 5000)
+news    = readLines(list_files[2], 5000)
+twitter = readLines(list_files[3], 5000)
+
+sample_text = paste(blogs, news, twitter)
+sample_text = sent_detect(sample_text, language = "en") # this may take some time
+```
+
+Once the lines are loaded, we will perform some text mining operations on it, such as removing stop words (since the text is in English we will limit only to that), remove punctuation, numbers and white spaces.
+
+```{r}
+sample_corpus = VCorpus(VectorSource(sample_text))
+sample_corpus = tm_map(sample_corpus, content_transformer(tolower))
+sample_corpus = tm_map(sample_corpus, removeWords, stopwords(kind = "en"))
+sample_corpus = tm_map(sample_corpus, removePunctuation)
+sample_corpus = tm_map(sample_corpus, removeNumbers)
+sample_corpus = tm_map(sample_corpus, stripWhitespace)
+```
+
+With the sample corpus created, we will move on to creating a term matrix. We would like to see what are the most frequent words (e.g. more than 200 times) showing in our sample corpus.
+
+```{r}
+docMarix = TermDocumentMatrix(sample_corpus, control = list(minWordLength = 5))
+frequent_terms = findFreqTerms(docMarix, lowfreq = 200)
+frequent_terms
+```
+
+The current sample corpus will be changed into a data.frame type before proceeding with the Weka backed analysis.
+
+```{r}
+sample_data_frame = data.frame(text = unlist(sapply(sample_corpus, '[', "content")), stringsAsFactors = FALSE)
+```
+
+Next we will create tokens for n-gram frequencies (2, 3 or multiple words).
+
+```{r}
+token = function(data, size)
+{
+  ngram           = NGramTokenizer(data, Weka_control(min=size, max=size, delimiters = " \\t\\r\\n.!?,;\"()"))
+  word            = data.frame(table(ngram))
+  sorted          = word[order(word$Freq, decreasing=T),]
+  colnames(sorted) = c("Item", "Count")
+  sorted
+}
+
+one   = token(sample_data_frame,1)
+two   = token(sample_data_frame,2)
+three = token(sample_data_frame,3)
+```
+
+
+Once the tokens are created, a nice way to visualize it is the cloud of words representation.
+
+```{r, warning=FALSE}
+prettycloud = function(data,frequency = 1,count = 10)
+{
+  wordcloud(data[,1][1:count], data[,2][1:count], min.freq = frequency, random.order = T, colors = brewer.pal(12,"Paired"), ordered.colors = F)
+}
+prettycloud(one,10,30)
+prettycloud(two,1,15)
+prettycloud(three)
+```
+
+Another way to visualize the words frequencies is by utilizing bar plots.
+```{r}
+par(mfrow = c(1, 1))
+prettybars = function(data, count = 10)
+{
+  barplot(data[1:count,2], names.arg = data[1:count,1], cex.names = .5, col = heat.colors(count), main = c("Frequency of ", length(strsplit(gsub(' {1,}', ' ', data$Item[1]),' ')[[1]]), " word(s)"), las = 2)
+}
+prettybars(one)
+prettybars(two)
+prettybars(three)
+```
+
+We will analyze how many words will cover for 50% and 90% of all instances.
+```{r}
+one = cbind(one, one$Count/sum(one$Count))
+colnames(one) = c("Item", "Count", "%")
+
+uniq = function(percent)
+{
+  feq   = 0
+  count = 1
+  
+  while(feq < percent)
+    {
+      feq = feq + one[count,3]
+      count = count +1
+  }
+  count
+}
+```
+
+# 3. Conclusions
+
+  - Each data file that we worked with had a rather big size, over 150Mb
+  - The most numerous lines were found in `en_US.twitter.txt` file with more than 2M lines
+  - The file `en_US.blogs.txt` had the most words and characters with over 37M and 210M respectively 
+  - ``r uniq(.5)`` words count for 50% of all words instances, while ``r uniq(.9)`` cover 90%
+  
+# 4. Future work for the final project
+  
+  - Some of the words in the document are not English, so a better way to clenup the corpus is needed
+  - Out of all the English words, some may not be correctly spelled, which will require further cleanup
+  - Other characters may need to be removed (e.g emoticons)
+  - A list of profanities is needed
+  - A prediction algorithm for n-grams is needed for the model
+  - Evaluate its accuracy, speed etc...
